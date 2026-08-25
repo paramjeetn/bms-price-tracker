@@ -47,13 +47,13 @@ days_ahead: 7          # how many days to check
 
 ## Milestones
 
-- [x] **M1** — Network discovery (`discover_bms.py`)
-- [ ] **M2** — Single movie extractor (`app/bms/client.py`)
-- [ ] **M3** — All movies discovery
-- [ ] **M4** — All dates
-- [ ] **M5** — Price engine + Turso
-- [ ] **M6** — ntfy alerts
-- [ ] **M7** — GitHub Actions cron (persistent monitoring)
+- [x] **M1** — Network discovery (`discover_bms.py` / `curl_cffi` + `__INITIAL_STATE__`)
+- [x] **M2** — Single movie extractor (`app/bms/client.py`, `app/bms/parser.py`)
+- [x] **M3** — All movies discovery (3-tier SEO/regex parser)
+- [x] **M4** — All dates scanning support
+- [x] **M5** — Price engine + Turso libSQL integration (`app/storage/turso.py`, `app/monitoring/comparator.py`)
+- [x] **M6** — ntfy alerts (`app/notifications/ntfy.py`)
+- [x] **M7** — GitHub Actions cron setup (`.github/workflows/monitor.yml`)
 
 ## Running locally
 
