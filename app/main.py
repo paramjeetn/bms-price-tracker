@@ -65,63 +65,64 @@ async def run():
     print(f"  ntfy topic: {ntfy_topic}")
     print(f"{'='*60}\n")
 
-    bms = BMSClient(city_code=city_code)
+    try:
+        bms = BMSClient(city_code=city_code)
 
-    # Build notify callback
-    async def notify(slot: ShowSlot, alert_type: str, price_from: int | None):
-        print(f"  🔔 ALERT [{alert_type}] {slot.movie} @ {slot.cinema} "
-              f"{slot.showtime} {slot.category} ₹{slot.price}")
-        await send_notification(slot, alert_type, price_from, ntfy_server, ntfy_topic)
+        # Build notify callback
+        async def notify(slot: ShowSlot, alert_type: str, price_from: int | None):
+            print(f"  🔔 ALERT [{alert_type}] {slot.movie} @ {slot.cinema} "
+                  f"{slot.showtime} {slot.category} ₹{slot.price}")
+            await send_notification(slot, alert_type, price_from, ntfy_server, ntfy_topic)
 
-    # Counters
-    total_slots = 0
-    counts = {"inserted": 0, "price_drop": 0, "price_up": 0, "unchanged": 0}
+        # Counters
+        total_slots = 0
+        counts = {"inserted": 0, "price_drop": 0, "price_up": 0, "unchanged": 0}
 
-    async with get_turso_client() as db:
+        async with get_turso_client() as db:
 
-        # ── Step 1: Discover all movies ───────────────────────────────────
-        try:
-            movies = await bms.get_all_movies()
-        except NotImplementedError:
-            print("⚠️  BMS client not implemented yet.")
-            print("   Run discover_bms.py first (Milestone 1) to identify the API,")
-            print("   then implement app/bms/client.py and app/bms/parser.py.\n")
-            return
+            # ── Step 1: Discover all movies ───────────────────────────────────
+            try:
+                movies = await bms.get_all_movies()
+            except NotImplementedError:
+                print("⚠️  BMS client not implemented yet.")
+                print("   Run discover_bms.py first (Milestone 1) to identify the API,")
+                print("   then implement app/bms/client.py and app/bms/parser.py.\n")
+                return
 
-        print(f"Found {len(movies)} movies.\n")
+            print(f"Found {len(movies)} movies.\n")
 
-        # ── Step 2: For each movie × date, fetch and process slots ────────
-        for movie in movies:
-            for date in date_range(days_ahead):
-                print(f"  Scanning: {movie['title']} — {date}")
-                try:
-                    slots = await bms.get_slots(
-                        movie_id=movie["movie_id"],
-                        movie_name=movie["title"],
-                        date=date,
-                        booking_url=movie["booking_url"],
-                    )
-                except NotImplementedError:
-                    print("   ⚠️  Skipping — client not implemented.")
-                    break
-                except Exception as e:
-                    print(f"   ⚠️  Error fetching slots: {e}")
-                    continue
+            # ── Step 2: For each movie × date, fetch and process slots ────────
+            for movie in movies:
+                for date in date_range(days_ahead):
+                    print(f"  Scanning: {movie['title']} — {date}")
+                    try:
+                        slots = await bms.get_slots(
+                            movie_id=movie["movie_id"],
+                            movie_name=movie["title"],
+                            date=date,
+                            booking_url=movie["booking_url"],
+                        )
+                    except NotImplementedError:
+                        print("   ⚠️  Skipping — client not implemented.")
+                        break
+                    except Exception as e:
+                        print(f"   ⚠️  Error fetching slots: {e}")
+                        continue
 
-                for slot in slots:
-                    action = await process_slot(
-                        slot=slot,
-                        db=db,
-                        fetch_time=fetch_time,
-                        threshold=threshold,
-                        notify=notify,
-                        notify_price_up=notify_price_up,
-                    )
-                    counts[action] += 1
-                    total_slots += 1
+                    for slot in slots:
+                        action = await process_slot(
+                            slot=slot,
+                            db=db,
+                            fetch_time=fetch_time,
+                            threshold=threshold,
+                            notify=notify,
+                            notify_price_up=notify_price_up,
+                        )
+                        counts[action] += 1
+                        total_slots += 1
 
-        # ── Step 3: Cleanup stale slots ────────────────────────────────────
-        deleted = await db.delete_stale_slots(fetch_time)
+            # ── Step 3: Cleanup stale slots ────────────────────────────────────
+            deleted = await db.delete_stale_slots(fetch_time)
 
     finally:
         bms.close()
