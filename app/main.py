@@ -123,6 +123,9 @@ async def run():
         # ── Step 3: Cleanup stale slots ────────────────────────────────────
         deleted = await db.delete_stale_slots(fetch_time)
 
+    finally:
+        bms.close()
+
     # ── Summary ───────────────────────────────────────────────────────────────
     print(f"\n{'='*60}")
     print(f"  Cycle complete.")

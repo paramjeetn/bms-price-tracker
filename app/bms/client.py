@@ -61,6 +61,35 @@ class BMSClient:
             "x-region-code": self.city_code,
             "x-region-slug": self.city_slug,
         }
+        self._playwright = None
+        self._browser = None
+        self._context = None
+
+    def _get_browser_context(self):
+        if self._context is None:
+            from playwright.sync_api import sync_playwright
+            self._playwright = sync_playwright().start()
+            self._browser = self._playwright.chromium.launch(
+                headless=True,
+                args=["--no-sandbox", "--disable-setuid-sandbox", "--disable-dev-shm-usage"]
+            )
+            self._context = self._browser.new_context(
+                user_agent=self._headers["User-Agent"],
+                locale="en-IN",
+                timezone_id="Asia/Kolkata",
+            )
+            self._context.add_cookies([
+                {"name": "RRC", "value": self.city_code, "domain": "in.bookmyshow.com", "path": "/"},
+                {"name": "regionCode", "value": self.city_code, "domain": "in.bookmyshow.com", "path": "/"},
+                {"name": "regionSlug", "value": self.city_slug, "domain": "in.bookmyshow.com", "path": "/"},
+            ])
+        return self._context
+
+    def close(self):
+        if self._browser:
+            self._browser.close()
+        if self._playwright:
+            self._playwright.stop()
 
     # ── Internal helpers ───────────────────────────────────────────────────
 
@@ -81,23 +110,16 @@ class BMSClient:
 
         # Playwright fallback (works reliably in datacenter environments / GitHub Actions)
         try:
-            from playwright.sync_api import sync_playwright
-            with sync_playwright() as p:
-                browser = p.chromium.launch(headless=True)
-                context = browser.new_context(
-                    user_agent=self._headers["User-Agent"],
-                    locale="en-IN",
-                    timezone_id="Asia/Kolkata",
-                )
-                page = context.new_page()
-                page.goto(url, wait_until="domcontentloaded", timeout=30000)
-                page.wait_for_timeout(2000)
-                html = page.content()
-                browser.close()
-                if "window.__INITIAL_STATE__" in html or "__NEXT_DATA__" in html or "bookmyshow" in html:
-                    return html
+            context = self._get_browser_context()
+            page = context.new_page()
+            page.goto(url, wait_until="domcontentloaded", timeout=20000)
+            page.wait_for_timeout(1000)
+            html = page.content()
+            page.close()
+            if "window.__INITIAL_STATE__" in html or "__NEXT_DATA__" in html or "bookmyshow" in html:
+                return html
         except Exception as pe:
-            logger.error(f"Playwright fallback also failed for {url}: {pe}")
+            logger.error(f"Playwright fallback failed for {url}: {pe}")
 
         raise RuntimeError(f"Failed to fetch {url} via both curl_cffi and Playwright")
 
