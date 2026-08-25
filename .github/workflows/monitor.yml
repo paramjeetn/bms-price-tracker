@@ -2,8 +2,8 @@ name: BMS Price Monitor
 
 on:
   schedule:
-    # Every 30 minutes
-    - cron: '*/30 * * * *'
+    # Every 4 hours
+    - cron: '0 */4 * * *'
   # Allow manual trigger from GitHub UI for testing
   workflow_dispatch:
 

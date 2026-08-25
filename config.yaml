@@ -17,7 +17,7 @@ price_threshold: 100
 days_ahead: 7
 
 # Scrape interval (used in README, actual scheduling via GitHub Actions cron)
-check_interval_minutes: 30
+check_interval_minutes: 240
 
 ntfy:
   server: https://ntfy.sh

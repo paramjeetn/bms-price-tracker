@@ -10,32 +10,22 @@ from app.monitoring.rules import ntfy_priority
 from app.storage.turso import ALERT_NEW_CHEAP, ALERT_PRICE_DROP, ALERT_PRICE_UP
 
 
+def _format_date(date_str: str) -> str:
+    """Format YYYY-MM-DD to dd-mm-yyyy."""
+    try:
+        parts = date_str.split("-")
+        if len(parts) == 3 and len(parts[0]) == 4:
+            return f"{parts[2]}-{parts[1]}-{parts[0]}"
+    except Exception:
+        pass
+    return date_str
+
+
 def _build_message(slot: ShowSlot, alert_type: str, price_from: int | None) -> dict:
-    """Build the ntfy payload for a given alert."""
-
-    if alert_type == ALERT_NEW_CHEAP:
-        title = f"🎬 New Cheap Show — {slot.movie}"
-        body  = (
-            f"📍 {slot.cinema}\n"
-            f"📅 {slot.date}  🕐 {slot.showtime}"
-            + (f" [{slot.format}]" if slot.format else "")
-            + f"\n🎟  {slot.category}\n"
-            f"💰 ₹{slot.price}"
-        )
-
-    elif alert_type == ALERT_PRICE_DROP:
-        title = f"📉 Price Drop — {slot.movie}"
-        body  = (
-            f"📍 {slot.cinema}\n"
-            f"📅 {slot.date}  🕐 {slot.showtime}"
-            + (f" [{slot.format}]" if slot.format else "")
-            + f"\n🎟  {slot.category}\n"
-            f"💰 ₹{slot.price}  (was ₹{price_from})"
-        )
-
-    else:  # ALERT_PRICE_UP — shouldn't reach here normally
-        title = f"📈 Price Up — {slot.movie}"
-        body  = f"{slot.cinema} {slot.date} {slot.showtime} — ₹{slot.price} (was ₹{price_from})"
+    """Build minimal ntfy payload for an alert."""
+    formatted_date = _format_date(slot.date)
+    title = f"{slot.movie}"
+    body = f"{slot.cinema}, {formatted_date}, ₹{slot.price}"
 
     return {
         "title": title,

@@ -36,18 +36,12 @@ async def process_slot(
     action = result["action"]
     prev_price = result["previous_price"]
 
-    if action == "inserted" and qualifies_for_alert(slot, threshold):
-        # New slot that's already cheap — alert immediately
-        await notify(slot, ALERT_NEW_CHEAP, None)
-        await db.log_alert(slot, ALERT_NEW_CHEAP, None, fetch_time)
-
-    elif action == "price_drop" and qualifies_for_alert(slot, threshold):
-        # Existing slot just dropped below threshold
-        await notify(slot, ALERT_PRICE_DROP, prev_price)
-        await db.log_alert(slot, ALERT_PRICE_DROP, prev_price, fetch_time)
-
-    elif action == "price_up" and notify_price_up:
-        # Optional: log that price went up (no phone ping by default)
-        await db.log_alert(slot, ALERT_PRICE_UP, prev_price, fetch_time)
+    # Only alert if price is under threshold
+    if qualifies_for_alert(slot, threshold):
+        # Deduplicate: check if this hashed slot was already notified previously
+        already_notified = await db.has_been_notified(slot.fingerprint)
+        if not already_notified:
+            await notify(slot, ALERT_NEW_CHEAP, prev_price)
+            await db.log_alert(slot, ALERT_NEW_CHEAP, prev_price, fetch_time)
 
     return action

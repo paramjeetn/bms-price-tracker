@@ -164,6 +164,14 @@ class TursoClient:
         )
         return count
 
+    async def has_been_notified(self, fingerprint: str) -> bool:
+        """Check if an alert has already been sent for this fingerprint."""
+        rs = await self._client.execute(
+            "SELECT 1 FROM alerts WHERE fingerprint = ? LIMIT 1",
+            [fingerprint],
+        )
+        return bool(rs.rows)
+
     async def log_alert(
         self,
         slot: ShowSlot,
@@ -171,7 +179,7 @@ class TursoClient:
         price_from: Optional[int],
         sent_at: str,
     ):
-        """Append an entry to the alerts audit log (never deleted)."""
+        """Append an entry to the alerts audit log."""
         await self._client.execute(
             """
             INSERT INTO alerts

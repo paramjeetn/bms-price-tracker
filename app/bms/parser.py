@@ -62,6 +62,36 @@ def _parse_format(format_str: str) -> tuple[str, str]:
     return ("", format_str)
 
 
+def _is_valid_showtime(show_time_str: str) -> bool:
+    """
+    Check if a showtime string (e.g., '10:30 AM', '06:15 PM', '2:00 PM') falls within
+    the allowed window of 6:00 AM to 4:00 PM (06:00 to 16:00).
+    Ignores any showtimes between 6:00 PM and 6:00 AM.
+    """
+    if not show_time_str:
+        return True
+    match = re.search(r"(\d{1,2}):(\d{2})\s*(AM|PM)", show_time_str, re.IGNORECASE)
+    if not match:
+        return True
+
+    hour = int(match.group(1))
+    minute = int(match.group(2))
+    period = match.group(3).upper()
+
+    if period == "AM":
+        if hour == 12:
+            hour = 0
+    else:  # PM
+        if hour != 12:
+            hour += 12
+
+    show_time_minutes = hour * 60 + minute
+    start_minutes = 6 * 60       # 06:00 AM (360)
+    end_minutes = 16 * 60        # 04:00 PM (960)
+
+    return start_minutes <= show_time_minutes <= end_minutes
+
+
 def parse_slots(
     raw: dict,
     movie_id: str,
@@ -115,6 +145,9 @@ def parse_slots(
                             show_ad = show.get("additionalData", {})
                             show_time = show.get("title", "") or show_ad.get("showTime", "")
                             show_date_code = show_ad.get("showDateCode", "")
+
+                            if not _is_valid_showtime(show_time):
+                                continue
 
                             # Resolve date: prefer passed-in date, fallback to showDateCode
                             show_date = date
@@ -189,6 +222,8 @@ def parse_slots(
                 if not isinstance(show, dict):
                     continue
                 show_time  = str(show.get("showTime") or show.get("ShowTime") or "")
+                if not _is_valid_showtime(show_time):
+                    continue
                 show_date  = str(show.get("showDate") or date or "")
                 fmt        = str(show.get("experience") or show.get("format") or "2D")
                 language   = str(show.get("language") or "")
