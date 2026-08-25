@@ -1,0 +1,36 @@
+name: BMS Discovery (Milestone 1)
+
+on:
+  # Run manually to capture BMS network traffic and discover the API
+  workflow_dispatch:
+
+jobs:
+  discover:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: 'pip'
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Install Playwright Chromium
+        run: playwright install chromium --with-deps
+
+      - name: Run BMS network discovery
+        run: python discover_bms.py
+
+      - name: Upload discovery results
+        uses: actions/upload-artifact@v4
+        with:
+          name: bms-discovery-responses
+          path: discovery/responses/
+          retention-days: 7

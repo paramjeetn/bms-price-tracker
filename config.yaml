@@ -1,0 +1,33 @@
+cities:
+  - bhubaneswar
+
+# City code used internally by BookMyShow
+city_code: BHU
+
+# BMS base URL
+bms_base_url: https://in.bookmyshow.com
+
+# Awarapan 2 — used for Milestone 1 discovery
+discovery_url: "https://in.bookmyshow.com/movies/bhubaneswar/awarapan-2/buytickets/ET00439318/20260825"
+
+# Price threshold in ₹ — alert when any category is at or below this
+price_threshold: 100
+
+# How many days ahead to check (today + N days)
+days_ahead: 7
+
+# Scrape interval (used in README, actual scheduling via GitHub Actions cron)
+check_interval_minutes: 30
+
+ntfy:
+  server: https://ntfy.sh
+  topic: book_my_show_price_drop_alert_param
+
+alerts:
+  # Send alert when price increases too? (mostly for logging)
+  notify_price_increase: false
+
+filters:
+  languages: []   # empty = all languages
+  formats: []     # empty = all formats (2D, 3D, IMAX, etc.)
+  cinemas: []     # empty = all cinemas
