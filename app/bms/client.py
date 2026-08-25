@@ -65,16 +65,41 @@ class BMSClient:
     # ── Internal helpers ───────────────────────────────────────────────────
 
     def _sync_fetch(self, url: str) -> str:
-        """Synchronous fetch with Chrome TLS impersonation."""
-        resp = cffi_requests.get(
-            url,
-            headers=self._headers,
-            impersonate="chrome124",
-            timeout=self.timeout,
-        )
-        if resp.status_code != 200:
-            raise RuntimeError(f"HTTP {resp.status_code} fetching {url}")
-        return resp.text
+        """Synchronous fetch with Chrome TLS impersonation, falling back to Playwright if needed."""
+        try:
+            resp = cffi_requests.get(
+                url,
+                headers=self._headers,
+                impersonate="chrome124",
+                timeout=self.timeout,
+            )
+            if resp.status_code == 200:
+                return resp.text
+            logger.warning(f"curl_cffi returned {resp.status_code} for {url}. Attempting Playwright fallback...")
+        except Exception as e:
+            logger.warning(f"curl_cffi exception for {url}: {e}. Attempting Playwright fallback...")
+
+        # Playwright fallback (works reliably in datacenter environments / GitHub Actions)
+        try:
+            from playwright.sync_api import sync_playwright
+            with sync_playwright() as p:
+                browser = p.chromium.launch(headless=True)
+                context = browser.new_context(
+                    user_agent=self._headers["User-Agent"],
+                    locale="en-IN",
+                    timezone_id="Asia/Kolkata",
+                )
+                page = context.new_page()
+                page.goto(url, wait_until="domcontentloaded", timeout=30000)
+                page.wait_for_timeout(2000)
+                html = page.content()
+                browser.close()
+                if "window.__INITIAL_STATE__" in html or "__NEXT_DATA__" in html or "bookmyshow" in html:
+                    return html
+        except Exception as pe:
+            logger.error(f"Playwright fallback also failed for {url}: {pe}")
+
+        raise RuntimeError(f"Failed to fetch {url} via both curl_cffi and Playwright")
 
     @staticmethod
     def _extract_initial_state(html: str) -> dict | None:
