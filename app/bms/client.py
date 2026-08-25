@@ -125,7 +125,7 @@ class BMSClient:
         Discover all currently bookable movies in the configured city.
 
         Fetches: https://in.bookmyshow.com/explore/movies-{city_slug}?cat=MT
-        Returns: list[dict] with keys: movie_id, title, slug, booking_url
+        Returns: list[dict] with keys: movie_id, title, slug, languages, booking_url
         """
         url      = f"{self.BASE_URL}/explore/movies-{self.city_slug}?cat=MT"
         today    = datetime.now().strftime("%Y%m%d")
@@ -139,9 +139,14 @@ class BMSClient:
                 movies: list[dict] = []
                 seen:   set[str]   = set()
 
-                # ── Try __INITIAL_STATE__ ──────────────────────────────
+                # ── 1. Try __INITIAL_STATE__ Functional APIs ──────────
                 if state and isinstance(state, dict):
-                    for api_key in ("moviesListFunctionalApi", "exploreFunctionalApi", "showtimesFunctionalApi"):
+                    for api_key in (
+                        "moviesListFunctionalApi",
+                        "exploreFunctionalApi",
+                        "showtimesFunctionalApi",
+                        "exploreApi",
+                    ):
                         queries = state.get(api_key, {}).get("queries", {})
                         for q_val in queries.values():
                             if not isinstance(q_val, dict):
@@ -160,20 +165,94 @@ class BMSClient:
                                             )
                                         movies.append(m)
 
-                # ── HTML regex fallback: extract ET codes + slugs ──────
-                if not movies:
-                    pattern = re.compile(
-                        rf'/movies/{re.escape(self.city_slug)}/([a-z0-9-]+)/buytickets/(ET\d+)',
-                        re.IGNORECASE,
-                    )
-                    for slug, event_code in dict(pattern.findall(html)).items():
+                    # ── 2. Try SEO schema & footer in __INITIAL_STATE__ ──
+                    seo_queries = state.get("seo", {}).get("queries", {})
+                    for q_val in seo_queries.values():
+                        if not isinstance(q_val, dict):
+                            continue
+                        data = q_val.get("data", {})
+                        if not isinstance(data, dict):
+                            continue
+
+                        # ldSchema itemListElement (has structured movie title and URL)
+                        item_list = (
+                            data.get("ldSchema", {})
+                            .get("itemListSchema", {})
+                            .get("itemListElement", [])
+                        )
+                        if isinstance(item_list, list):
+                            for item in item_list:
+                                if not isinstance(item, dict):
+                                    continue
+                                item_url = item.get("url", "")
+                                item_name = item.get("name", "")
+                                m_match = re.search(
+                                    r'/(?:movies/)?([a-z0-9-]+)/(ET\d+)',
+                                    item_url,
+                                    re.IGNORECASE,
+                                )
+                                if m_match:
+                                    slug, event_code = m_match.group(1), m_match.group(2)
+                                    if event_code not in seen:
+                                        seen.add(event_code)
+                                        movies.append({
+                                            "movie_id": event_code,
+                                            "title": item_name or slug.replace("-", " ").title(),
+                                            "slug": slug,
+                                            "languages": [],
+                                            "booking_url": (
+                                                f"{self.BASE_URL}/movies/{self.city_slug}/"
+                                                f"{slug}/buytickets/{event_code}/{today}"
+                                            ),
+                                        })
+
+                        # footer links (e.g. Movies Now Showing in {City})
+                        footer_links = data.get("footer", {}).get("links", [])
+                        if isinstance(footer_links, list):
+                            for sec in footer_links:
+                                if not isinstance(sec, dict):
+                                    continue
+                                for it in sec.get("items", []):
+                                    if not isinstance(it, dict):
+                                        continue
+                                    link = it.get("link", "")
+                                    label = it.get("label", "")
+                                    m_match = re.search(
+                                        r'/(?:movies/)?([a-z0-9-]+)/(ET\d+)',
+                                        link,
+                                        re.IGNORECASE,
+                                    )
+                                    if m_match:
+                                        slug, event_code = m_match.group(1), m_match.group(2)
+                                        if event_code not in seen:
+                                            seen.add(event_code)
+                                            movies.append({
+                                                "movie_id": event_code,
+                                                "title": label or slug.replace("-", " ").title(),
+                                                "slug": slug,
+                                                "languages": [],
+                                                "booking_url": (
+                                                    f"{self.BASE_URL}/movies/{self.city_slug}/"
+                                                    f"{slug}/buytickets/{event_code}/{today}"
+                                                ),
+                                            })
+
+                # ── 3. HTML regex fallback: extract ET codes + slugs ──
+                regex_patterns = [
+                    re.compile(r'href=["\'](?:https?://[^/]+)?/movies/([a-z0-9-]+)/(ET\d+)["\']', re.IGNORECASE),
+                    re.compile(r'href=["\'](?:https?://[^/]+)?/[^/]+/movies/([a-z0-9-]+)/(ET\d+)["\']', re.IGNORECASE),
+                    re.compile(r'href=["\'](?:https?://[^/]+)?/movies/[^/]+/([a-z0-9-]+)/buytickets/(ET\d+)', re.IGNORECASE),
+                    re.compile(r'/(?:movies/)?([a-z0-9-]+)/(ET\d{8})', re.IGNORECASE),
+                ]
+                for p in regex_patterns:
+                    for slug, event_code in p.findall(html):
                         if event_code not in seen:
                             seen.add(event_code)
                             movies.append({
-                                "movie_id":   event_code,
-                                "title":      slug.replace("-", " ").title(),
-                                "slug":       slug,
-                                "languages":  [],
+                                "movie_id": event_code,
+                                "title": slug.replace("-", " ").title(),
+                                "slug": slug,
+                                "languages": [],
                                 "booking_url": (
                                     f"{self.BASE_URL}/movies/{self.city_slug}/"
                                     f"{slug}/buytickets/{event_code}/{today}"

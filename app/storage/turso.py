@@ -193,4 +193,8 @@ def get_turso_client() -> TursoClient:
     token = os.environ.get("TURSO_TOKEN", "")
     if not url or not token:
         raise RuntimeError("TURSO_URL and TURSO_TOKEN environment variables must be set.")
+    # libsql_client on some platforms has WebSocket issues with libsql:// scheme.
+    # Convert to https:// which uses HTTP transport (no transactions, but works everywhere).
+    if url.startswith("libsql://"):
+        url = url.replace("libsql://", "https://", 1)
     return TursoClient(url=url, token=token)
