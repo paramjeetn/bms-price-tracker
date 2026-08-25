@@ -1,5 +1,5 @@
 """
-BookMyShow network discovery script — Milestone 1.
+BookMyShow network discovery script - Milestone 1.
 
 Run this FIRST before anything else. It opens the Awarapan 2 booking page
 using Playwright, intercepts every network response, and prints all JSON
@@ -19,8 +19,14 @@ Output:
 import asyncio
 import json
 import os
+import sys
 from pathlib import Path
 from datetime import datetime
+
+if hasattr(sys.stdout, 'reconfigure'):
+    sys.stdout.reconfigure(encoding='utf-8', errors='replace')
+if hasattr(sys.stderr, 'reconfigure'):
+    sys.stderr.reconfigure(encoding='utf-8', errors='replace')
 
 try:
     from playwright.async_api import async_playwright
@@ -32,14 +38,14 @@ try:
     from rich.console import Console
     from rich.panel import Panel
     from rich.syntax import Syntax
-    console = Console()
+    console = Console(force_terminal=False)
 except ImportError:
     class Console:
         def print(self, *a, **k): print(*a)
         def rule(self, *a, **k): print("=" * 60)
     console = Console()
 
-# ── Config ────────────────────────────────────────────────────────────────────
+# -- Config --------------------------------------------------------------------
 
 TARGET_URL = (
     "https://in.bookmyshow.com/movies/bhubaneswar/awarapan-2/"
@@ -55,7 +61,7 @@ INTERESTING_KEYWORDS = [
     "quickbook", "getdata", "serv",
 ]
 
-# ── Helpers ───────────────────────────────────────────────────────────────────
+# -- Helpers -------------------------------------------------------------------
 
 def is_interesting(url: str, body: dict | list) -> bool:
     """Heuristic: is this response likely to contain show/price data?"""
@@ -77,10 +83,10 @@ def save_response(url: str, body: dict | list, index: int) -> Path:
     filename.write_text(json.dumps({"url": url, "body": body}, indent=2), encoding="utf-8")
     return filename
 
-# ── Main ──────────────────────────────────────────────────────────────────────
+# -- Main ----------------------------------------------------------------------
 
 async def discover():
-    console.rule("[bold cyan]BOOKMYSHOW NETWORK DISCOVERY — Milestone 1")
+    console.rule("[bold cyan]BOOKMYSHOW NETWORK DISCOVERY - Milestone 1")
     console.print(f"\n[yellow]Target URL:[/] {TARGET_URL}")
     console.print(f"[yellow]Output dir:[/] {OUTPUT_DIR}\n")
 
@@ -100,31 +106,34 @@ async def discover():
         )
         page = await context.new_page()
 
-        # ── Intercept every response ──────────────────────────────────────
+        # -- Intercept every response --------------------------------------
         async def on_response(response):
-            url = response.url
-            # Skip non-BMS and non-JSON
-            if "bookmyshow" not in url:
-                return
-            content_type = response.headers.get("content-type", "")
-            if "json" not in content_type:
-                return
             try:
-                body = await response.json()
-            except Exception:
-                return
+                url = response.url
+                # Skip non-BMS and non-JSON
+                if "bookmyshow" not in url:
+                    return
+                content_type = response.headers.get("content-type", "")
+                if "json" not in content_type:
+                    return
+                try:
+                    body = await response.json()
+                except Exception:
+                    return
 
-            entry = {"url": url, "status": response.status, "body": body}
-            captured.append(entry)
-            if is_interesting(url, body):
-                interesting.append(entry)
-                console.print(f"  [green]✓ Interesting:[/] {url[:100]}")
-            else:
-                console.print(f"  [dim]  Captured:[/] {url[:100]}")
+                entry = {"url": url, "status": response.status, "body": body}
+                captured.append(entry)
+                if is_interesting(url, body):
+                    interesting.append(entry)
+                    print(f"  [+] Interesting: {url[:100]}")
+                else:
+                    print(f"      Captured: {url[:100]}")
+            except Exception:
+                pass
 
         page.on("response", on_response)
 
-        # ── Load the page ─────────────────────────────────────────────────
+        # -- Load the page -------------------------------------------------
         console.print("[bold]Loading page...[/]")
         try:
             await page.goto(TARGET_URL, wait_until="networkidle", timeout=30_000)
@@ -139,14 +148,14 @@ async def discover():
             show_buttons = await page.query_selector_all("[class*='show-time'], [class*='showtime'], [data-testid*='show']")
             if show_buttons:
                 await show_buttons[0].click()
-                console.print("[yellow]Clicked first showtime button — waiting for price data...[/]")
+                console.print("[yellow]Clicked first showtime button - waiting for price data...[/]")
                 await page.wait_for_timeout(3000)
         except Exception:
             pass
 
         await browser.close()
 
-    # ── Report ────────────────────────────────────────────────────────────
+    # -- Report ------------------------------------------------------------
     console.rule()
     console.print(f"\n[bold]Total JSON responses captured:[/] {len(captured)}")
     console.print(f"[bold green]Interesting responses:[/] {len(interesting)}\n")
@@ -166,7 +175,7 @@ async def discover():
             console.print(preview)
 
         path = save_response(entry["url"], entry["body"], i + 1)
-        console.print(f"  [dim]Saved → {path}[/]")
+        console.print(f"  [dim]Saved -> {path}[/]")
 
     console.rule()
     console.print(

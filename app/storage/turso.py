@@ -101,7 +101,7 @@ class TursoClient:
         )
         if rs.rows:
             row = rs.rows[0]
-            return dict(zip([c.name for c in rs.columns], row))
+            return dict(zip(rs.columns, row))
         return None
 
     async def upsert_slot(self, slot: ShowSlot, fetch_time: str) -> dict:

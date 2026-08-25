@@ -1,107 +1,279 @@
 """
-BookMyShow API client.
+BookMyShow client -- fetches movies and showtimes using curl_cffi with
+Chrome TLS impersonation to bypass Cloudflare WAF.
 
-STATUS: Placeholder — will be implemented after Milestone 1 (discover_bms.py)
-reveals which API endpoints BookMyShow uses internally.
+Strategy:
+  1. Fetch SSR HTML page with curl_cffi (impersonate='chrome124')
+  2. Extract window.__INITIAL_STATE__ JSON from the HTML
+  3. Navigate state["showtimesFunctionalApi"]["queries"]["fetchPrimaryDynamic-..."]
+  4. Call parser.parse_slots() on the extracted data block
 
-The interface is fixed:
-    client = BMSClient(config)
-    slots = await client.get_slots(movie_id, date, city_code)
-
-Returns a list of ShowSlot objects.
+No direct JSON API calls -- they all return 403 from Cloudflare.
 """
 
 from __future__ import annotations
-import httpx
-from typing import Any
+
+import asyncio
+import json
+import logging
+import re
+from datetime import datetime
+from typing import Any, Optional
+
+from curl_cffi import requests as cffi_requests
+
 from app.bms.models import ShowSlot
-from app.bms.parser import parse_slots
+from app.bms.parser import parse_slots, parse_movies_response
+
+logger = logging.getLogger(__name__)
 
 
 class BMSClient:
     """
-    HTTP client for BookMyShow.
+    BookMyShow client.
 
-    After running discover_bms.py, fill in the real API URL and
-    request/response structure in this class and in parser.py.
+    Uses curl_cffi with impersonate='chrome124' to bypass Cloudflare,
+    then extracts embedded JSON from the SSR HTML.
     """
 
     BASE_URL = "https://in.bookmyshow.com"
 
-    # TODO: Replace with the real endpoint discovered in Milestone 1
-    # Common patterns seen in BMS apps:
-    #   /serv/getData?cmd=GETQUICKBOOK&...
-    #   /api/v1/venue/shows?...
-    #   /api/movies-by-city/...
-    SHOWS_ENDPOINT = "/serv/getData"
-
-    def __init__(self, city_code: str = "BHU"):
-        self.city_code = city_code
-        self._headers = {
+    def __init__(
+        self,
+        city_slug: str = "bhubaneswar",
+        city_code: str = "BHU",
+        region_code: str = "BHUB",   # used in __INITIAL_STATE__ query key
+        timeout: float = 20.0,
+    ):
+        self.city_slug   = city_slug
+        self.city_code   = city_code
+        self.region_code = region_code
+        self.timeout     = timeout
+        self._headers    = {
             "User-Agent": (
                 "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
                 "AppleWebKit/537.36 (KHTML, like Gecko) "
                 "Chrome/124.0.0.0 Safari/537.36"
             ),
-            "Accept": "application/json, text/plain, */*",
+            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
             "Accept-Language": "en-IN,en;q=0.9",
             "Referer": "https://in.bookmyshow.com/",
-            "x-bms-id": "IN-BMS",
-            "x-region-code": city_code,
-            "x-region-slug": "bhubaneswar",
+            "x-region-code": self.city_code,
+            "x-region-slug": self.city_slug,
         }
+
+    # ── Internal helpers ───────────────────────────────────────────────────
+
+    def _sync_fetch(self, url: str) -> str:
+        """Synchronous fetch with Chrome TLS impersonation."""
+        resp = cffi_requests.get(
+            url,
+            headers=self._headers,
+            impersonate="chrome124",
+            timeout=self.timeout,
+        )
+        if resp.status_code != 200:
+            raise RuntimeError(f"HTTP {resp.status_code} fetching {url}")
+        return resp.text
+
+    @staticmethod
+    def _extract_initial_state(html: str) -> dict | None:
+        """Extract window.__INITIAL_STATE__ JSON embedded in HTML."""
+        # Method 1: raw_decode from assignment position
+        pos = html.find("window.__INITIAL_STATE__ =")
+        if pos != -1:
+            sub = html[pos + len("window.__INITIAL_STATE__ ="):].strip()
+            try:
+                state, _ = json.JSONDecoder().raw_decode(sub)
+                return state
+            except Exception as e:
+                logger.debug(f"raw_decode __INITIAL_STATE__ failed: {e}")
+
+        # Method 2: __NEXT_DATA__ script tag
+        m = re.search(
+            r'<script\b[^>]*id=["\']__NEXT_DATA__["\'][^>]*>(.*?)</script>',
+            html, re.DOTALL | re.IGNORECASE,
+        )
+        if m:
+            try:
+                return json.loads(m.group(1).strip())
+            except Exception:
+                pass
+
+        # Method 3: regex fallback
+        m2 = re.search(r'__INITIAL_STATE__\s*=\s*({.*?});\s*</script>', html, re.DOTALL)
+        if m2:
+            try:
+                return json.loads(m2.group(1).strip())
+            except Exception:
+                pass
+
+        return None
+
+    def _slug_from(self, movie_name: str, booking_url: str = "") -> str:
+        """Derive URL slug from booking_url or movie title."""
+        if booking_url:
+            m = re.search(r"/movies/[^/]+/([^/]+)/buytickets/", booking_url)
+            if m:
+                return m.group(1)
+        return re.sub(r"[^a-zA-Z0-9]+", "-", movie_name).strip("-").lower() or "movie"
+
+    # ── Public API ─────────────────────────────────────────────────────────
 
     async def get_all_movies(self) -> list[dict]:
         """
         Discover all currently bookable movies in the configured city.
 
-        TODO: implement after Milestone 1 reveals the movies-listing endpoint.
+        Fetches: https://in.bookmyshow.com/explore/movies-{city_slug}?cat=MT
+        Returns: list[dict] with keys: movie_id, title, slug, booking_url
         """
-        raise NotImplementedError(
-            "Run discover_bms.py first (Milestone 1) to find the correct API endpoint."
-        )
+        url      = f"{self.BASE_URL}/explore/movies-{self.city_slug}?cat=MT"
+        today    = datetime.now().strftime("%Y%m%d")
+        last_err : Exception | None = None
+
+        for attempt in range(1, 4):
+            try:
+                html  = await asyncio.to_thread(self._sync_fetch, url)
+                state = self._extract_initial_state(html)
+
+                movies: list[dict] = []
+                seen:   set[str]   = set()
+
+                # ── Try __INITIAL_STATE__ ──────────────────────────────
+                if state and isinstance(state, dict):
+                    for api_key in ("moviesListFunctionalApi", "exploreFunctionalApi", "showtimesFunctionalApi"):
+                        queries = state.get(api_key, {}).get("queries", {})
+                        for q_val in queries.values():
+                            if not isinstance(q_val, dict):
+                                continue
+                            items = q_val.get("data", {})
+                            if isinstance(items, dict):
+                                items = items.get("data", [])
+                            if isinstance(items, list):
+                                for m in parse_movies_response(items):
+                                    if m["movie_id"] and m["movie_id"] not in seen:
+                                        seen.add(m["movie_id"])
+                                        if not m.get("booking_url"):
+                                            m["booking_url"] = (
+                                                f"{self.BASE_URL}/movies/{self.city_slug}/"
+                                                f"{m['slug']}/buytickets/{m['movie_id']}/{today}"
+                                            )
+                                        movies.append(m)
+
+                # ── HTML regex fallback: extract ET codes + slugs ──────
+                if not movies:
+                    pattern = re.compile(
+                        rf'/movies/{re.escape(self.city_slug)}/([a-z0-9-]+)/buytickets/(ET\d+)',
+                        re.IGNORECASE,
+                    )
+                    for slug, event_code in dict(pattern.findall(html)).items():
+                        if event_code not in seen:
+                            seen.add(event_code)
+                            movies.append({
+                                "movie_id":   event_code,
+                                "title":      slug.replace("-", " ").title(),
+                                "slug":       slug,
+                                "languages":  [],
+                                "booking_url": (
+                                    f"{self.BASE_URL}/movies/{self.city_slug}/"
+                                    f"{slug}/buytickets/{event_code}/{today}"
+                                ),
+                            })
+
+                if movies:
+                    logger.info(f"Discovered {len(movies)} movies in {self.city_slug}")
+                    return movies
+
+                logger.warning(f"[{attempt}/3] No movies found from {url}")
+
+            except Exception as e:
+                logger.warning(f"[{attempt}/3] get_all_movies error: {e}")
+                last_err = e
+
+            if attempt < 3:
+                await asyncio.sleep(2)
+
+        logger.error(f"get_all_movies failed after 3 attempts. Last: {last_err}")
+        return []
 
     async def get_slots(
         self,
-        movie_id: str,
+        movie_id:   str,
         movie_name: str,
-        date: str,
-        booking_url: str,
+        date:       str,           # ISO: '2026-08-25'
+        booking_url: str = "",
     ) -> list[ShowSlot]:
         """
-        Fetch all ShowSlots for a given movie + date.
+        Fetch all ShowSlots for a movie + date.
 
-        TODO: implement after Milestone 1 reveals the correct API endpoint
-        and response structure.
-
-        Args:
-            movie_id:    BMS event code, e.g. "ET00439318"
-            movie_name:  Human-readable title, e.g. "Awarapan 2"
-            date:        ISO date string, e.g. "2026-08-25"
-            booking_url: BMS booking URL for this movie
-
-        Returns:
-            List of ShowSlot objects (one per cinema × showtime × category).
+        Steps:
+          1. Build SSR page URL
+          2. Fetch HTML with Chrome impersonation
+          3. Extract __INITIAL_STATE__
+          4. Find fetchPrimaryDynamic query key
+          5. Parse via parse_slots()
         """
-        # TODO: Replace with actual API call discovered in Milestone 1
-        # Example of what this might look like:
-        #
-        # async with httpx.AsyncClient(headers=self._headers) as client:
-        #     resp = await client.get(
-        #         f"{self.BASE_URL}{self.SHOWS_ENDPOINT}",
-        #         params={
-        #             "cmd": "GETQUICKBOOK",
-        #             "code": movie_id,
-        #             "mtype": "MT",
-        #             "city": self.city_code,
-        #             "date": date.replace("-", ""),
-        #             "output": "json",
-        #         },
-        #     )
-        #     resp.raise_for_status()
-        #     raw = resp.json()
-        #     return parse_slots(raw, movie_id, movie_name, date, booking_url)
+        # Normalise date to both formats
+        date_clean = date.replace("-", "")
+        date_iso   = f"{date_clean[:4]}-{date_clean[4:6]}-{date_clean[6:8]}" if "-" not in date else date
 
-        raise NotImplementedError(
-            "Run discover_bms.py first (Milestone 1) to find the correct API endpoint."
-        )
+        slug     = self._slug_from(movie_name, booking_url)
+        page_url = f"{self.BASE_URL}/movies/{self.city_slug}/{slug}/buytickets/{movie_id}/{date_clean}"
+        if not booking_url:
+            booking_url = page_url
+
+        last_err: Exception | None = None
+
+        for attempt in range(1, 4):
+            try:
+                html  = await asyncio.to_thread(self._sync_fetch, page_url)
+                state = self._extract_initial_state(html)
+
+                if not state or not isinstance(state, dict):
+                    logger.warning(f"[{attempt}/3] No __INITIAL_STATE__ at {page_url}")
+                    if attempt < 3:
+                        await asyncio.sleep(2)
+                    continue
+
+                queries    = state.get("showtimesFunctionalApi", {}).get("queries", {})
+
+                # Exact key first
+                target_key = f"fetchPrimaryDynamic-{movie_id}---{date_clean}-{self.region_code}"
+                query_obj  = queries.get(target_key)
+
+                # Fuzzy fallback: any key containing the movie_id or fetchPrimaryDynamic
+                if not query_obj:
+                    for k, v in queries.items():
+                        if "fetchPrimaryDynamic" in k or movie_id in k:
+                            query_obj = v
+                            logger.debug(f"Used fuzzy key: {k}")
+                            break
+
+                raw_data: dict = {}
+                if isinstance(query_obj, dict):
+                    inner = query_obj.get("data", {})
+                    raw_data = inner.get("data", inner) if isinstance(inner, dict) else {}
+
+                slots = parse_slots(
+                    raw        = raw_data,
+                    movie_id   = movie_id,
+                    movie_name = movie_name,
+                    date       = date_iso,
+                    booking_url= booking_url,
+                )
+
+                if slots:
+                    logger.info(f"Got {len(slots)} slots for {movie_name} on {date_iso}")
+                    return slots
+
+                logger.info(f"[{attempt}/3] 0 slots for {movie_name} ({movie_id}) on {date_iso}")
+
+            except Exception as e:
+                logger.warning(f"[{attempt}/3] get_slots error for {movie_id}: {e}")
+                last_err = e
+
+            if attempt < 3:
+                await asyncio.sleep(2)
+
+        logger.error(f"get_slots failed for {movie_id} after 3 attempts. Last: {last_err}")
+        return []
