@@ -5,7 +5,7 @@ import os
 
 sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 # Make sure app package is importable
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
 async def test():
     from app.bms.client import BMSClient

@@ -6,3 +6,8 @@ __pycache__/
 dist/
 .venv/
 venv/
+*.html
+debug_*.json
+bms_initial_state.json
+discovery_*.json
+discovery_next_data.json
