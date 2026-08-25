@@ -22,14 +22,20 @@ def _format_date(date_str: str) -> str:
 
 
 def _build_message(slot: ShowSlot, alert_type: str, price_from: int | None) -> dict:
-    """Build minimal ntfy payload for an alert."""
+    """Build clean plain-text ntfy payload for an alert."""
     formatted_date = _format_date(slot.date)
-    title = f"{slot.movie}"
-    body = f"{slot.cinema}, {formatted_date}, ₹{slot.price}"
+    showtime_str = f"{formatted_date} {slot.showtime}".strip()
+    
+    body = (
+        f"{slot.movie}\n"
+        f"{slot.cinema}\n"
+        f"{showtime_str}\n"
+        f"₹{slot.price}"
+    )
 
     return {
-        "title": title,
-        "body":  body,
+        "title": slot.movie,
+        "body": body,
         "priority": ntfy_priority(slot.price),
         "click": slot.booking_url,
         "tags": ["movie_ticket", "bookmyshow"],
@@ -50,17 +56,19 @@ async def send_notification(
     url = f"{ntfy_server.rstrip('/')}/{ntfy_topic}"
 
     try:
+        headers = {
+            "Title": payload["title"],
+            "Priority": payload["priority"],
+            "Tags": ",".join(payload["tags"]),
+        }
+        if payload.get("click"):
+            headers["Click"] = payload["click"]
+
         async with httpx.AsyncClient(timeout=10) as client:
             resp = await client.post(
                 url,
-                json={
-                    "topic":    ntfy_topic,
-                    "title":    payload["title"],
-                    "message":  payload["body"],
-                    "priority": payload["priority"],
-                    "click":    payload["click"],
-                    "tags":     payload["tags"],
-                },
+                content=payload["body"],
+                headers=headers,
             )
             resp.raise_for_status()
             return True
