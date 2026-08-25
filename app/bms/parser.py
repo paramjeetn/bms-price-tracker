@@ -54,12 +54,11 @@ def _parse_format(format_str: str) -> tuple[str, str]:
     if not format_str:
         return ("", "")
     format_str = format_str.strip()
-    if " - " in format_str:
-        parts = format_str.split(" - ", 1)
-        return (parts[0].strip(), parts[1].strip())
-    elif "-" in format_str:
-        parts = format_str.split("-", 1)
-        return (parts[0].strip(), parts[1].strip())
+    # BMS uses ' • ' (bullet) or ' - ' as separator between language and format
+    for sep in (" \u2022 ", " - ", "\u2022", "-"):
+        if sep in format_str:
+            parts = format_str.split(sep, 1)
+            return (parts[0].strip(), parts[1].strip())
     return ("", format_str)
 
 
@@ -109,7 +108,7 @@ def parse_slots(
                     for section in sections:
                         if not isinstance(section, dict):
                             continue
-                        for show in section.get("shows", []):
+                        for show in section.get("showtimes", section.get("shows", [])):
                             if not isinstance(show, dict):
                                 continue
 
