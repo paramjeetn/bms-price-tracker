@@ -1,0 +1,929 @@
+Absolutely. I’d build this as a **small, self-hosted BookMyShow price-monitoring service** using **Crawl4AI + Playwright + SQLite + ntfy**.
+
+![Image](https://images.openai.com/static-rsc-4/9R5t9MP0XjPu5Wa5vesJ7Bz0Ec1Utq0ncRpdp2JgKBmXFlnXW83Alyan-tjQ93s3M7IXFyv2J0t8-8LarqSHL6LFPa-_1yObZEjQ4pD3oFaw2_wWSxxmVUjBgKJ3rdfXVN1h5_01bRT69bpUr6ZFRk5yhZhzwCWZkNSltwfpuAaFSh5Mf_kIeS56QqkLu10X?purpose=fullsize)
+
+![Image](https://images.openai.com/static-rsc-4/8s_oPeWf-nMIAyZRGioXu_4Zfv6hj-bEQk5QJWEZeF_AESehUVI_FkqULjqXWRu62OYlXZTnXd69AN1uPY4CcQRFlMIrN-oRo1M8Yt4a5X2gf0CFa7rZxHm98M3_8fMteLzTn02xj3QHk4yrRqX5ymZhkzU3arSLxSa3sB3n2Afr9k2Gib1oV6YkW56xv04s?purpose=fullsize)
+
+![Image](https://images.openai.com/static-rsc-4/Dwnhr-qP1KMh-229OkLUKB5ZvEDlTwmL91uW1peJJMxyy_HQ9YXu6iQE3NPCk_KluFe0g2JZAj7s01req8EYjPNhqMS9mm-Ol15_dIWLXj-FGCsBfopJtkE-0CsQrnEs5G0B9ABgAzeJ836zJTxPxARaCb31LdDEnDy5IHojfgiGMKZY31k9BFslHjTSKqtW?purpose=fullsize)
+
+![Image](https://images.openai.com/static-rsc-4/eMf4Q1pIBUIkcPlIjxf-nFlFVTcH9X2LGcr7BtmQJv2S5oAVQVsIllRNGt2GtmZgnZW8LH2ygV4Lq7btUGsX8abn4pvN-sqFkH7rLDmndafpkKa0udcOY9SeGolaS089ZDRDBGB7whxk8lAayg5LTzxIzDDK3KYj2VGNxLVdswwFRm_Loa_UYoq7zN_WiZMd?purpose=fullsize)
+
+![Image](https://images.openai.com/static-rsc-4/FCAmrCHK-PUAF01gBdPmythYe9RRmF1EfAzS2LTEQ_yMZABLEx-_PWM4-fJ1Uws0j87C4tGRhDYFNNOhW-ed53qruue3_0FhXmx949RzWGpWFvJMXZWBu-t_7XK7ALBGP2BXSFb0T2ieJFoLiiB8iMBWAfPslD6lWWJNvUpR687o3zcs7D-TG3Et8J_cgQ2V?purpose=fullsize)
+
+## 1. What we're building
+
+The end product:
+
+> **“Watch every movie/show in Bhubaneswar and notify me whenever a ticket category is ≤ ₹100.”**
+
+It will continuously discover:
+
+```text
+Movie
+  ↓
+Date
+  ↓
+Cinema
+  ↓
+Showtime
+  ↓
+Format
+  ↓
+Seat category
+  ↓
+Price
+  ↓
+Availability
+```
+
+Then apply rules:
+
+```text
+price <= configured_threshold
+AND
+ticket is bookable
+AND
+we haven't already alerted for this exact opportunity
+```
+
+→ **ntfy notification**
+
+---
+
+# 2. Architecture
+
+```text
+                         ┌──────────────────────┐
+                         │      BookMyShow      │
+                         └──────────┬───────────┘
+                                    │
+                                    ▼
+                         ┌──────────────────────┐
+                         │       Crawl4AI       │
+                         │  Chromium / Playwright│
+                         └──────────┬───────────┘
+                                    │
+                    ┌───────────────┴────────────────┐
+                    │                                │
+                    ▼                                ▼
+             Movie discovery                  Booking pages
+                    │                                │
+                    └───────────────┬────────────────┘
+                                    ▼
+                            Price extraction
+                                    │
+                                    ▼
+                         ┌──────────────────────┐
+                         │     Normalizer       │
+                         └──────────┬───────────┘
+                                    │
+                                    ▼
+                         ┌──────────────────────┐
+                         │       SQLite         │
+                         │ movies / shows /     │
+                         │ prices / alerts      │
+                         └──────────┬───────────┘
+                                    │
+                                    ▼
+                         ┌──────────────────────┐
+                         │    Alert engine      │
+                         └──────────┬───────────┘
+                                    │
+                              price <= ₹X
+                                    │
+                                    ▼
+                         ┌──────────────────────┐
+                         │        ntfy          │
+                         └──────────┬───────────┘
+                                    │
+                                    ▼
+                              📱 Phone
+```
+
+---
+
+# 3. Phase 1 — Reverse engineer BookMyShow
+
+**This is the most important phase.**
+
+We should not immediately write a giant scraper.
+
+We'll use the Awarapan 2 page you provided as our laboratory.
+
+[Awarapan 2 booking page](https://in.bookmyshow.com/movies/bhubaneswar/awarapan-2/buytickets/ET00439318/20260825?etCodes=ET00439318&language=hindi&refEventCode=ET00439318&utm_source=chatgpt.com)
+
+We'll make Crawl4AI:
+
+1. Open the page.
+2. Wait for the movie/show content.
+3. Capture network requests.
+4. Capture responses.
+5. Identify requests triggered by:
+
+   * changing dates
+   * selecting/hovering showtimes
+   * opening pricing information
+6. Save interesting JSON responses locally.
+
+The goal is to discover whether BookMyShow already sends something like:
+
+```json
+{
+  "cinema": "...",
+  "show": "10:30 AM",
+  "categories": [
+    {
+      "name": "Classic",
+      "price": 100
+    },
+    {
+      "name": "Premium",
+      "price": 150
+    }
+  ]
+}
+```
+
+If we find that, **we don't need to scrape the visual tooltip**.
+
+That's much better.
+
+---
+
+# 4. Phase 2 — Build a BMS data extractor
+
+Once we've identified the useful request(s), we'll create a clean internal interface:
+
+```python
+get_movie_schedule(movie_id, city, date)
+```
+
+Returning:
+
+```python
+[
+    {
+        "movie": "Awarapan 2",
+        "date": "2026-08-25",
+        "cinema": "Cinema X",
+        "showtime": "10:30 AM",
+        "format": "2D",
+        "category": "Classic",
+        "price": 100,
+        "availability": "available",
+    }
+]
+```
+
+The rest of the application shouldn't care **how BookMyShow works internally**.
+
+That's an important design decision.
+
+If BookMyShow changes its frontend later, we only need to repair this adapter.
+
+---
+
+# 5. Phase 3 — Movie discovery
+
+We'll start from:
+
+[BookMyShow Bhubaneswar movies](https://in.bookmyshow.com/explore/movies-bhubaneswar?cat=MT&utm_source=chatgpt.com)
+
+Crawl4AI extracts:
+
+```text
+Movie
+├── title
+├── movie_id
+├── language
+├── format
+└── booking URL
+```
+
+Example:
+
+```text
+Awarapan 2
+ET00439318
+Hindi
+...
+```
+
+We'll maintain a movie table:
+
+```text
+movies
+------------------
+id
+bms_id
+title
+language
+city
+booking_url
+active
+first_seen
+last_seen
+```
+
+---
+
+# 6. Phase 4 — Date discovery
+
+For each active movie:
+
+```text
+Aug 25
+Aug 26
+Aug 27
+Aug 28
+...
+```
+
+We don't want to blindly crawl an infinite number of dates.
+
+Initially I'd use:
+
+**Today → +7 days**
+
+Then we can configure it.
+
+For example:
+
+```yaml
+days_ahead: 7
+```
+
+---
+
+# 7. Phase 5 — Cinema/show extraction
+
+For every movie/date:
+
+```text
+Movie
+ ↓
+Cinema
+ ↓
+Showtime
+ ↓
+Format
+ ↓
+Category
+ ↓
+Price
+```
+
+The normalized record might look like:
+
+```json
+{
+  "movie_id": "ET00439318",
+  "date": "2026-08-26",
+  "cinema_id": "ABC123",
+  "cinema": "PVR XYZ",
+  "show_id": "SHOW456",
+  "time": "10:30 AM",
+  "format": "2D",
+  "category": "Classic",
+  "price": 99,
+  "available": true
+}
+```
+
+---
+
+# 8. Phase 6 — SQLite database
+
+We don't need PostgreSQL initially.
+
+SQLite is plenty.
+
+I'd use approximately these tables:
+
+### `movies`
+
+```text
+id
+bms_id
+title
+language
+city
+booking_url
+active
+```
+
+### `cinemas`
+
+```text
+id
+bms_id
+name
+city
+```
+
+### `shows`
+
+```text
+id
+movie_id
+cinema_id
+date
+time
+format
+booking_url
+```
+
+### `prices`
+
+```text
+id
+show_id
+category
+price
+available
+observed_at
+```
+
+### `alerts`
+
+```text
+id
+show_id
+category
+price
+alert_type
+sent_at
+```
+
+This gives us historical price information too.
+
+---
+
+# 9. Phase 7 — Price monitoring
+
+Now the actual interesting part.
+
+Configuration:
+
+```yaml
+price_threshold: 100
+```
+
+Suppose the scraper sees:
+
+```text
+Awarapan 2
+PVR XYZ
+10:30 AM
+
+Classic ₹150
+Premium ₹200
+```
+
+Nothing happens.
+
+Next scan:
+
+```text
+Classic ₹99
+Premium ₹200
+```
+
+Our engine detects:
+
+```text
+150 → 99
+```
+
+and sends an alert.
+
+---
+
+# 10. New-show detection
+
+We should **not only detect price drops**.
+
+Suppose:
+
+```text
+10:30 AM — ₹150
+```
+
+doesn't qualify.
+
+Then BookMyShow adds:
+
+```text
+12:15 PM — ₹90
+```
+
+That's not technically a price drop.
+
+But it's exactly the sort of thing you want.
+
+So we alert for:
+
+### A. Price drop
+
+```text
+₹150 → ₹99
+```
+
+### B. Newly discovered cheap show
+
+```text
+New show → ₹99
+```
+
+### C. Newly cheap category
+
+```text
+Classic ₹99
+```
+
+even if the show already existed.
+
+---
+
+# 11. Alert deduplication
+
+This is critical.
+
+Imagine the scraper runs every 15 minutes:
+
+```text
+09:00 → ₹99
+09:15 → ₹99
+09:30 → ₹99
+09:45 → ₹99
+```
+
+You don't want four notifications.
+
+We'll create an alert fingerprint:
+
+```text
+movie + date + cinema + show + category + price-state
+```
+
+Then:
+
+```text
+first observation → alert
+same state         → ignore
+price changes      → evaluate again
+show disappears    → record
+show returns       → evaluate again
+```
+
+---
+
+# 12. ntfy
+
+ntfy is perfect for this because we don't need to build our own mobile notification system.
+
+[ntfy documentation](https://docs.ntfy.sh/?utm_source=chatgpt.com)
+
+We can publish to:
+
+```text
+bms-bhubaneswar-deals
+```
+
+Example notification:
+
+```text
+🎬 BookMyShow Price Alert
+
+Awarapan 2
+
+📍 PVR XYZ
+📅 26 Aug
+🕐 10:30 AM
+🎟 Classic
+💰 ₹99
+
+Book now:
+https://in.bookmyshow.com/...
+```
+
+We can also set notification priority based on price:
+
+```text
+₹100 → normal
+₹75  → high
+₹50  → max
+```
+
+---
+
+# 13. Configuration
+
+I'd keep everything in one config file.
+
+Something like:
+
+```yaml
+cities:
+  - bhubaneswar
+
+price_threshold: 100
+
+days_ahead: 7
+
+check_interval_minutes: 30
+
+ntfy:
+  server: https://ntfy.sh
+  topic: bms-bhubaneswar-deals
+```
+
+Eventually:
+
+```yaml
+cities:
+  - bhubaneswar
+  - balangir
+
+price_threshold: 120
+
+days_ahead: 7
+
+check_interval_minutes: 30
+
+filters:
+  languages: []
+  formats: []
+  cinemas: []
+```
+
+An empty filter means **everything**.
+
+---
+
+# 14. Scheduling
+
+We have several options.
+
+### Simple
+
+Linux cron:
+
+```text
+*/30 * * * *
+```
+
+### Better
+
+A Python scheduler running continuously.
+
+### My recommendation
+
+Start with **Docker + cron/systemd**.
+
+Eventually:
+
+```text
+Docker
+ ├── scraper
+ ├── scheduler
+ └── SQLite volume
+```
+
+For a single user, we don't need Kubernetes or anything complicated.
+
+---
+
+# 15. Project structure
+
+I'd structure the repository like this:
+
+```text
+bms-price-tracker/
+│
+├── app/
+│   ├── discovery/
+│   │   └── movies.py
+│   │
+│   ├── bms/
+│   │   ├── client.py
+│   │   ├── parser.py
+│   │   └── models.py
+│   │
+│   ├── monitoring/
+│   │   ├── scanner.py
+│   │   └── price_rules.py
+│   │
+│   ├── notifications/
+│   │   └── ntfy.py
+│   │
+│   ├── storage/
+│   │   ├── database.py
+│   │   └── models.py
+│   │
+│   └── main.py
+│
+├── discovery/
+│   └── awarapan2/
+│
+├── tests/
+│
+├── config.yaml
+├── Dockerfile
+├── docker-compose.yml
+├── requirements.txt
+└── README.md
+```
+
+---
+
+# 16. Development stages
+
+I would **not** try to build everything simultaneously.
+
+### Milestone 1 — Network discovery
+
+Input:
+
+```text
+Awarapan 2
+```
+
+Output:
+
+```text
+Interesting BookMyShow API/network requests
+```
+
+**Success criterion:** identify where the price information comes from.
+
+---
+
+### Milestone 2 — Single movie
+
+Input:
+
+```text
+Awarapan 2
+```
+
+Output:
+
+```text
+Cinema
+Show
+Category
+Price
+Availability
+```
+
+**Success criterion:** we can reproduce the information you see manually.
+
+---
+
+### Milestone 3 — All movies
+
+Input:
+
+```text
+Bhubaneswar
+```
+
+Output:
+
+```text
+Movie A
+Movie B
+Movie C
+...
+```
+
+**Success criterion:** discover all currently bookable movies.
+
+---
+
+### Milestone 4 — All dates
+
+```text
+Today → +7 days
+```
+
+**Success criterion:** correctly enumerate the schedule across dates.
+
+---
+
+### Milestone 5 — Price engine
+
+```text
+threshold = ₹100
+```
+
+**Success criterion:** correctly identify every qualifying ticket.
+
+---
+
+### Milestone 6 — ntfy
+
+```text
+cheap ticket
+     ↓
+notification
+```
+
+**Success criterion:** phone receives a useful notification.
+
+---
+
+### Milestone 7 — Persistent monitoring
+
+```text
+every 30 minutes
+        ↓
+database
+        ↓
+deduplication
+        ↓
+alerts
+```
+
+**Success criterion:** can run unattended for days.
+
+---
+
+# 17. The really useful version
+
+Once the basic version works, we can make it considerably smarter.
+
+For example:
+
+### “Under ₹100”
+
+```text
+₹99 → alert
+```
+
+### “At least ₹30 cheaper than yesterday”
+
+```text
+₹150 → ₹110
+```
+
+### “Morning shows under ₹100”
+
+```text
+06:00–11:00
+```
+
+### “Any show under ₹80 within 5 km”
+
+If we eventually have cinema coordinates.
+
+### “Only Friday/Saturday”
+
+```yaml
+days:
+  - friday
+  - saturday
+```
+
+### “Don't alert me for the same movie twice”
+
+Useful if you're only looking for genuinely different opportunities.
+
+---
+
+# 18. One important technical decision
+
+There are **two possible implementations**.
+
+### Option A — Crawl the visible UI
+
+```text
+Crawl4AI
+ ↓
+click/hover
+ ↓
+read tooltip
+ ↓
+extract price
+```
+
+This is easy to understand but potentially fragile.
+
+### Option B — Discover the underlying requests
+
+```text
+Crawl4AI
+ ↓
+capture network
+ ↓
+find BookMyShow data request
+ ↓
+extract JSON
+```
+
+**I strongly prefer B.**
+
+We'll still keep Crawl4AI/Chromium available as a fallback when BookMyShow requires browser interaction.
+
+---
+
+# 19. Anti-bot / reliability considerations
+
+We should design this conservatively.
+
+We're talking about a personal monitoring tool, so there's no reason to hammer BookMyShow.
+
+I'd use:
+
+```text
+30-minute interval
+reasonable concurrency
+randomized small delays
+persistent browser/session where appropriate
+caching
+only request pages/data we actually need
+```
+
+And if BookMyShow changes its frontend/API, the scraper should fail gracefully rather than generating thousands of requests.
+
+We should also respect BookMyShow's terms and robots/access restrictions rather than trying to bypass anti-bot protections.
+
+---
+
+# 20. What I would build first
+
+**Don't write the complete application yet.**
+
+The first deliverable should be a tiny experiment:
+
+```text
+crawl4ai/
+└── discover_bms.py
+```
+
+Run:
+
+```bash
+python discover_bms.py
+```
+
+Against the exact Awarapan 2 booking URL.
+
+It should produce:
+
+```text
+================================================
+BOOKMYSHOW NETWORK DISCOVERY
+================================================
+
+Page loaded.
+
+Requests observed: 147
+
+Potential API requests:
+
+[1] GET ...
+[2] POST ...
+[3] GET ...
+
+JSON responses:
+
+[1]
+{
+    ...
+}
+
+[2]
+{
+    ...
+}
+```
+
+Then we inspect those responses and answer the **single most important question**:
+
+> **Can we obtain every cinema/show/category/price from BookMyShow without manually hovering each showtime?**
+
+If yes, we can build the rest cleanly.
+
+---
+
+## Final stack
+
+| Component          | Technology                |
+| ------------------ | ------------------------- |
+| Browser automation | **Crawl4AI / Playwright** |
+| Extraction         | Python                    |
+| Data               | SQLite                    |
+| Scheduling         | cron/systemd initially    |
+| Notifications      | **ntfy**                  |
+| Configuration      | YAML                      |
+| Deployment         | Docker                    |
+| Source control     | Git                       |
+| Target             | BookMyShow                |
+| Initial city       | Bhubaneswar               |
+| Initial threshold  | ₹100                      |
+| Initial horizon    | 7 days                    |
+| Initial interval   | 30 min                    |
+
+**So the next step is Milestone 1: reverse-engineer the Awarapan 2 booking page with Crawl4AI.** Once we see the network responses, we can design the actual extractor around what BookMyShow is really returning rather than guessing.
