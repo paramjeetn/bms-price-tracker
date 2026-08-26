@@ -115,9 +115,9 @@ class BMSClient:
             )
             if resp.status_code == 200:
                 return resp.text
-            logger.warning(f"curl_cffi returned {resp.status_code} for {url}. Attempting Playwright fallback...")
+            logger.debug(f"curl_cffi returned {resp.status_code} for {url}. Attempting Playwright fallback...")
         except Exception as e:
-            logger.warning(f"curl_cffi exception for {url}: {e}. Attempting Playwright fallback...")
+            logger.debug(f"curl_cffi exception for {url}: {e}. Attempting Playwright fallback...")
 
         # Playwright fallback (works reliably in datacenter environments / GitHub Actions)
         try:
@@ -427,5 +427,5 @@ class BMSClient:
             if attempt < 3:
                 await asyncio.sleep(2)
 
-        logger.error(f"get_slots failed for {movie_id} after 3 attempts. Last: {last_err}")
+        logger.info(f"No slots available for {movie_name} ({movie_id}) on {date_iso}")
         return []
