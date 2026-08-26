@@ -14,7 +14,7 @@ discovery_url: "https://in.bookmyshow.com/movies/bhubaneswar/awarapan-2/buyticke
 price_threshold: 100
 
 # How many days ahead to check (today + N days)
-days_ahead: 7
+days_ahead: 3
 
 # Scrape interval (used in README, actual scheduling via GitHub Actions cron)
 check_interval_minutes: 240
