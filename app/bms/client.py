@@ -86,10 +86,21 @@ class BMSClient:
         return self._context
 
     def close(self):
-        if self._browser:
-            self._browser.close()
-        if self._playwright:
-            self._playwright.stop()
+        try:
+            if self._context:
+                self._context.close()
+        except Exception:
+            pass
+        try:
+            if self._browser:
+                self._browser.close()
+        except Exception:
+            pass
+        try:
+            if self._playwright:
+                self._playwright.stop()
+        except Exception:
+            pass
 
     # ── Internal helpers ───────────────────────────────────────────────────
 
