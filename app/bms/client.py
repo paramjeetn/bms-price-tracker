@@ -121,14 +121,29 @@ class BMSClient:
 
         # Playwright fallback (works reliably in datacenter environments / GitHub Actions)
         try:
-            context = self._get_browser_context()
-            page = context.new_page()
-            page.goto(url, wait_until="domcontentloaded", timeout=20000)
-            page.wait_for_timeout(1000)
-            html = page.content()
-            page.close()
-            if "window.__INITIAL_STATE__" in html or "__NEXT_DATA__" in html or "bookmyshow" in html:
-                return html
+            from playwright.sync_api import sync_playwright
+            with sync_playwright() as p:
+                browser = p.chromium.launch(
+                    headless=True,
+                    args=["--no-sandbox", "--disable-setuid-sandbox", "--disable-dev-shm-usage"]
+                )
+                context = browser.new_context(
+                    user_agent=self._headers["User-Agent"],
+                    locale="en-IN",
+                    timezone_id="Asia/Kolkata",
+                )
+                context.add_cookies([
+                    {"name": "RRC", "value": self.city_code, "domain": "in.bookmyshow.com", "path": "/"},
+                    {"name": "regionCode", "value": self.city_code, "domain": "in.bookmyshow.com", "path": "/"},
+                    {"name": "regionSlug", "value": self.city_slug, "domain": "in.bookmyshow.com", "path": "/"},
+                ])
+                page = context.new_page()
+                page.goto(url, wait_until="domcontentloaded", timeout=25000)
+                page.wait_for_timeout(1000)
+                html = page.content()
+                browser.close()
+                if "window.__INITIAL_STATE__" in html or "__NEXT_DATA__" in html or "bookmyshow" in html:
+                    return html
         except Exception as pe:
             logger.error(f"Playwright fallback failed for {url}: {pe}")
 
